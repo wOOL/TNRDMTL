@@ -1,25 +1,21 @@
-import tensorflow as tf
 import numpy as np
-from scipy.linalg import svd
+import tensorflow as tf
+from tensorflow.python.framework import function
+from tensorflow.python.framework import dtypes
 
 
-def nuclear_norm(X):
-    return np.sum(svd(X, compute_uv=False))
+@function.Defun(dtypes.float32, dtypes.float32)
+def nuclear_norm_grad(x, dy):
+    _, U, V = tf.svd(x, full_matrices=False, compute_uv=True)
+    grad = tf.matmul(U, tf.transpose(V))
+    return dy * grad
 
 
-def nuclear_norm_grad(X):
-    U, _, V = svd(X, full_matrices=False)
-    return np.dot(U, V)
-
-
-def nuclear_norm_tf(X):
-    return tf.py_func(nuclear_norm, [X], [tf.float32], name='nuclear_norm')[0]
-
-
-@tf.RegisterGradient("nuclear_norm")
-def nuclear_norm_grad_tf(op, grad):
-    X = op.inputs[0]
-    return grad * tf.py_func(nuclear_norm_grad, [X], [tf.float32], name='nuclear_norm_grad')[0]
+@function.Defun(dtypes.float32, grad_func=nuclear_norm_grad)
+def nuclear_norm(x):
+    sigma = tf.svd(x, full_matrices=False, compute_uv=False)
+    norm = tf.reduce_sum(sigma)
+    return norm
 
 
 def TensorUnfold(A, k):
@@ -34,20 +30,20 @@ def tensor_nuclear_norm(X, method='Tucker'):
     shapeX = X.get_shape().as_list()
     dimX = len(shapeX)
     if method == 'Tucker':
-        re = [nuclear_norm_tf(i) for i in [TensorUnfold(X, j) for j in range(dimX)]]
+        re = [nuclear_norm(i) for i in [TensorUnfold(X, j) for j in range(dimX)]]
     elif method == 'TT':
-        re = [nuclear_norm_tf(i) for i in
+        re = [nuclear_norm(i) for i in
               [tf.reshape(X, [np.prod(shapeX[:j]), np.prod(shapeX[j:])]) for j in range(1, dimX)]]
-    elif method == 'SVD':
-        re = [nuclear_norm_tf(TensorUnfold(X, -1))]
+    elif method == 'LAF':
+        re = [nuclear_norm(TensorUnfold(X, -1))]
     return tf.pack(re)
 
 
 with tf.Graph().as_default() as g:
-    with g.gradient_override_map({"PyFunc": "nuclear_norm"}):
-        # NN code here
+    sess = tf.InteractiveSession()
+    # NN code here
 
-        loss_norm = tf.reduce_mean(
-            tf.pack([tf.reduce_mean(tensor_nuclear_norm(j, 'SVD')) for j in [W_conv1, W_conv2, W_conv3, W_fc1]]))
+    loss_norm = tf.reduce_mean(
+        tf.pack([tf.reduce_mean(tensor_nuclear_norm(j, 'LAF')) for j in [W_conv1, W_conv2, W_conv3, W_fc1]]))
 
-        # W_conv1 is the stacked W_conv1's from all NNs' first layers
+    # W_conv1 is the stacked W_conv1's from all NNs' first layers
